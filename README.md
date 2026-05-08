@@ -1,142 +1,199 @@
-# plus-infra
-
-Repositório de infraestrutura local do projeto **Plus** — sistema de gestão de estoque de roupas.
-
-Orquestra os microsserviços, microfrontends e a stack AWS local (Ministack) via Docker Compose. O provisionamento dos recursos AWS é feito automaticamente via Terraform ao subir a stack.
-
----
+# 🚀 Plus Stack — Setup Local
 
 ## Pré-requisitos
 
-| Ferramenta | Versão mínima | Instalação |
-|---|---|---|
-| Docker | 24+ | https://docs.docker.com/get-docker/ |
+- **Docker Desktop** (macOS/Windows) ou **Docker + Docker Compose** (Linux)
+- **Git**
+- **Make** (macOS/Linux já têm; Windows: usar WSL2)
 
 ---
 
-## Estrutura de repositórios
-
-Todos os repositórios devem estar dentro do mesmo diretório:
-
-```
-projeto/
-├── plus-infra/          ← este repositório
-│   ├── terraform/
-│   │   ├── main.tf
-│   │   └── variables.tf
-│   ├── docker-compose.yml
-│   ├── Makefile
-│   └── .env.example
-├── plus-ms-auth/        ← microsserviço
-├── plus-mfe-auth/       ← microfrontend
-└── plus-shell/          ← shell do frontend
-```
-
-### Clonando os repositórios irmãos
+## Guia Rápido (5 minutos)
 
 ```bash
-# A partir do diretório do projeto/
-git clone <url-plus-ms-auth>  plus-ms-auth
-git clone <url-plus-mfe-auth> plus-mfe-auth
-git clone <url-plus-shell>    plus-shell
-git clone <url-plus-infra>    plus-infra
-```
+# 1. Clone e entre no diretório
+git clone <repo-url>
+cd T1-ESII/plus-infra
 
----
-
-## Configuração inicial
-
-```bash
-cd plus-infra
-
-# 1. Copie e edite as variáveis de ambiente
+# 2. Configure variáveis de ambiente
 cp .env.example .env
-# Edite .env conforme necessário (JWT_SECRET em especial)
+# Edite .env se precisar mudar portas
 
-# 2. Sobe toda a stack
+# 3. Suba a stack
+make setup
+
+# 4. Teste
+curl -X POST http://localhost:3001/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"test@example.com","password":"test123"}'
+# Resposta esperada: {"token":"eyJ...","refresh":"eyJ..."}
+```
+
+**Windows (PowerShell):**
+```powershell
+docker compose down -v 2>$null
+docker compose up -d
+Start-Sleep -Seconds 30
+powershell -ExecutionPolicy Bypass -File scripts/init-db.ps1
+```
+
+---
+
+## Serviços Disponíveis
+
+| Serviço | URL | Descrição |
+|---------|-----|-----------|
+| Shell App | http://localhost:3000 | Frontend principal |
+| MFE Auth | http://localhost:4001 | Microfrontend de autenticação |
+| MS Auth API | http://localhost:3001 | Backend de autenticação |
+| LocalStack | http://localhost:4566 | AWS emulado (S3, RDS, API Gateway) |
+| PostgreSQL | localhost:5432 | Banco de dados |
+
+---
+
+## Credenciais de Teste
+
+| Email | Senha |
+|-------|-------|
+| test@example.com | test123 |
+| admin@example.com | admin123 |
+| user@example.com | user123 |
+| dev@example.com | dev123 |
+
+---
+
+## Fluxo de Autenticação
+
+```bash
+# Login → recebe tokens JWT
+curl -X POST http://localhost:3001/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"test@example.com","password":"test123"}'
+
+# Acessar recurso protegido
+curl -H "Authorization: Bearer $TOKEN" http://localhost:3001/auth/me
+# Resposta: {"id":1,"email":"test@example.com"}
+
+# Renovar token
+curl -X POST http://localhost:3001/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refresh":"$REFRESH_TOKEN"}'
+```
+
+---
+
+## Comandos Make
+
+```bash
+make setup          # Setup completo (recomendado — primeira vez)
+make up             # Iniciar containers
+make down           # Parar containers
+make restart        # Reiniciar containers
+make health         # Health check visual de todos os serviços
+make test           # Suite de testes de integração (7/7)
+make seed-db        # Popular banco com usuários de teste
+make logs           # Logs de todos os serviços
+make logs-auth      # Logs apenas do MS Auth
+make status         # Status dos containers
+make clean          # Remover volumes e containers
+make reset          # Limpar tudo e reiniciar do zero
+make tf-apply       # Provisionar infraestrutura via Terraform
+make help           # Ver todos os comandos
+```
+
+---
+
+## Gerenciar o Banco de Dados
+
+```bash
+# Acessar PostgreSQL
+docker compose exec plus-postgres psql -U plus -d plus_auth
+
+# Ver usuários
+SELECT id, email, name, created_at FROM users;
+
+# Exportar dados
+docker compose exec plus-postgres pg_dump -U plus plus_auth > backup.sql
+```
+
+---
+
+## Trocar Portas (conflito com outro processo)
+
+Edite `.env`:
+```env
+MS_AUTH_PORT=3011
+MFE_AUTH_PORT=4011
+SHELL_PORT=3010
+```
+Depois: `docker compose restart`
+
+---
+
+## Troubleshooting
+
+### "Porta X já em uso"
+```bash
+# macOS/Linux — encontrar e matar processo
+lsof -i :3001 | grep -v COMMAND | awk '{print $2}' | xargs kill -9
+# Ou simplesmente mude a porta no .env
+```
+
+### "PostgreSQL falha ao iniciar"
+```bash
+docker compose down -v
+docker compose up -d
+sleep 30
+bash scripts/init-db.sh
+```
+
+### "Terraform provisioning falha"
+```bash
+docker compose down -v
+rm -f terraform/terraform.tfstate*
 make setup
 ```
 
-O `make setup`:
-1. Inicializa os providers Terraform (`terraform init`)
-2. Sobe o Ministack e aguarda ele estar saudável
-3. Provisiona os recursos AWS via `terraform apply` (S3, RDS, API Gateway)
-4. Sobe todos os demais serviços
+### "Cannot connect to Docker daemon"
+- macOS/Windows: certifique-se que o Docker Desktop está aberto
+- Linux: `sudo usermod -aG docker $USER` e reinicie o terminal
 
-> O provisionamento também acontece automaticamente ao rodar `docker compose up` diretamente — o serviço `infra-provisioner` executa o Terraform antes de liberar os demais serviços.
-
----
-
-## Comandos disponíveis
-
-| Comando | Descrição |
-|---|---|
-| `make setup` | Setup completo: `terraform init` → Ministack → `terraform apply` → todos os serviços |
-| `make up` | Sobe todos os serviços (`docker compose up -d`) |
-| `make down` | Para e remove os containers |
-| `make logs` | Acompanha os logs em tempo real |
-| `make reset` | Derruba tudo (inclusive volumes) e refaz o setup do zero |
-| `make tf-init` | Inicializa os providers Terraform |
-| `make tf-apply` | Provisiona os recursos no Ministack via Terraform |
-
----
-
-## URLs e portas locais
-
-| Serviço | URL local | Descrição |
-|---|---|---|
-| plus-shell | http://localhost:3000 | Shell App (microfrontend host) |
-| plus-ms-auth | http://localhost:3001 | Microsserviço de autenticação |
-| plus-mfe-auth | http://localhost:4001 | Microfrontend de autenticação |
-| Ministack | http://localhost:4566 | Emulador AWS |
-| API Gateway | `http://localhost:4566/restapis/<api-id>/v1/_user_request_` | Gateway para plus-ms-auth |
-| RDS (PostgreSQL) | `localhost:5432` | Banco provisionado pelo Ministack |
-
-> O ID do API Gateway é gerado dinamicamente pelo Terraform e exibido no output do `make setup`.
-> Para consultar depois: `awslocal apigateway get-rest-apis`
-
-### Rotas do API Gateway
-
-| Método | Rota | Destino |
-|---|---|---|
-| POST | `/auth/login` | plus-ms-auth:3001 |
-| POST | `/auth/refresh` | plus-ms-auth:3001 |
-| POST | `/auth/logout` | plus-ms-auth:3001 |
-| GET | `/auth/me` | plus-ms-auth:3001 |
-
----
-
-## Como adicionar um novo microsserviço
-
-1. **Crie o repositório** no mesmo nível dos demais (ex: `plus-ms-inventory/`).
-
-2. **Adicione o serviço ao `docker-compose.yml`**, dependendo do `infra-provisioner`:
-
-```yaml
-plus-ms-inventory:
-  build:
-    context: ../plus-ms-inventory
-    dockerfile: Dockerfile
-  container_name: plus-ms-inventory
-  ports:
-    - "${MS_INVENTORY_PORT:-3002}:3002"
-  environment:
-    - AWS_ENDPOINT=http://ministack:4566
-    - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-    - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-    - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
-  depends_on:
-    infra-provisioner:
-      condition: service_completed_successfully
-  restart: unless-stopped
+### "No space left on device"
+```bash
+docker compose down
+docker system prune -a --volumes
 ```
 
-3. **Adicione a porta ao `.env.example`** (e ao seu `.env`):
-
-```env
-MS_INVENTORY_PORT=3002
+### Reset completo
+```bash
+docker compose down -v && make setup
 ```
 
-4. **Se precisar de rotas no API Gateway ou outros recursos AWS**, adicione os recursos correspondentes em `terraform/main.tf` seguindo os padrões já existentes para S3, RDS e API Gateway.
+---
 
-5. Rode `make reset` para recriar a stack com as novas configurações.
+## ⚠️ Notas Importantes
+
+- **Não commite `.env`** — use `.env.example` como template
+- Dados são perdidos ao rodar `docker compose down -v`
+- `JWT_SECRET` padrão é fraco — mude em produção
+- LocalStack é emulação — não use em produção real
+
+---
+
+## Arquitetura
+
+```
+┌─────────────────────────────────────────────────────┐
+│                 DOCKER NETWORK (plus-net)            │
+│                                                       │
+│  Shell App (3000) → MFE Auth (4001) → MS Auth (3001) │
+│                                          ↓            │
+│                                   PostgreSQL (5432)   │
+│                                                       │
+│  LocalStack (4566): S3 · RDS · API Gateway · STS     │
+└─────────────────────────────────────────────────────┘
+```
+
+---
+
+**Última atualização**: 08/05/2026 | Testado em: macOS (Intel + M1), Linux, Windows (WSL2)
