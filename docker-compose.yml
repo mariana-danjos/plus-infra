@@ -1,9 +1,15 @@
+networks:
+  plus-net:
+    driver: bridge
+
 services:
   ministack:
     image: ministackorg/ministack
     container_name: ministack
     ports:
       - "4566:4566"
+    networks:
+      - plus-net
     environment:
       - SERVICES=s3,rds,apigateway,sts
       - DEBUG=0
@@ -21,10 +27,31 @@ services:
       retries: 10
       start_period: 20s
 
+  postgres:
+    image: postgres:15-alpine
+    container_name: plus-postgres
+    networks:
+      - plus-net
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=${DB_USER:-plus}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-plus_secret}
+      - POSTGRES_DB=${DB_NAME:-plus_auth}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U plus"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   infra-provisioner:
     image: hashicorp/terraform:latest
     container_name: infra-provisioner
     working_dir: /infra
+    networks:
+      - plus-net
     volumes:
       - ./terraform:/infra
     environment:
@@ -33,9 +60,11 @@ services:
       - TF_VAR_db_user=${DB_USER:-plus}
       - TF_VAR_db_password=${DB_PASSWORD:-plus_secret}
       - TF_VAR_ms_auth_port=${MS_AUTH_PORT:-3001}
-    entrypoint: ["/bin/sh", "-c", "rm -f terraform.tfstate terraform.tfstate.backup && terraform init && terraform apply -auto-approve"]
+    entrypoint: ["/bin/sh", "-c", "terraform init && terraform apply -auto-approve"]
     depends_on:
       ministack:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
 
   plus-ms-auth:
@@ -43,6 +72,8 @@ services:
       context: ../plus-ms-auth
       dockerfile: Dockerfile
     container_name: plus-ms-auth
+    networks:
+      - plus-net
     ports:
       - "${MS_AUTH_PORT:-3001}:3001"
     environment:
@@ -53,14 +84,16 @@ services:
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
       - AWS_ENDPOINT=http://ministack:4566
-      - DB_HOST=${DB_HOST}
-      - DB_PORT=${DB_PORT}
-      - DB_USER=${DB_USER}
-      - DB_PASSWORD=${DB_PASSWORD}
-      - DB_NAME=${DB_NAME}
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=${DB_USER:-plus}
+      - DB_PASSWORD=${DB_PASSWORD:-plus_secret}
+      - DB_NAME=${DB_NAME:-plus_auth}
     depends_on:
       infra-provisioner:
         condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
   plus-mfe-auth:
@@ -68,6 +101,8 @@ services:
       context: ../plus-mfe-auth
       dockerfile: Dockerfile
     container_name: plus-mfe-auth
+    networks:
+      - plus-net
     ports:
       - "${MFE_AUTH_PORT:-4001}:4001"
     environment:
@@ -88,6 +123,8 @@ services:
       args:
         - MFE_AUTH_URL=http://localhost:4001/assets/remoteEntry.js
     container_name: plus-shell
+    networks:
+      - plus-net
     ports:
       - "${SHELL_PORT:-3000}:3000"
     environment:
@@ -104,3 +141,4 @@ services:
 
 volumes:
   ministack_data:
+  postgres_data:
