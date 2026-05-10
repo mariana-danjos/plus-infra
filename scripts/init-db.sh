@@ -2,37 +2,42 @@
 set -e
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "🗄️  Inicializando banco de dados PostgreSQL..."
+echo "🌱 Seed do banco de dados PostgreSQL..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 echo "⏳ Aguardando PostgreSQL ficar pronto..."
 sleep 5
 
-echo "📝 Criando tabela users..."
-docker compose exec -T plus-postgres psql -U plus -d plus_auth << 'EOF'
-CREATE TABLE IF NOT EXISTS users (
-  id SERIAL PRIMARY KEY,
-  email VARCHAR(255) UNIQUE NOT NULL,
-  password_hash VARCHAR(255) NOT NULL,
-  name VARCHAR(255),
-  created_at TIMESTAMP DEFAULT NOW()
-);
+echo "🔎 Verificando se a tabela 'users' existe (criada pelas migrations)..."
+EXISTS=$(docker compose exec -T postgres psql -U plus -d plus_auth -tAc \
+  "SELECT to_regclass('public.users') IS NOT NULL")
 
-INSERT INTO users (email, password_hash, name) 
-VALUES ('test@example.com', '$2a$10$BAhRUnvGqoTX1i.k9f3LeeOpmWtu71jI3eNF4vtH.Hxb4bnb.yDK2', 'Test User')
+if [ "$EXISTS" != "t" ]; then
+  echo ""
+  echo "❌ Tabela 'users' não existe. Rode as migrations primeiro:"
+  echo "   make migrate"
+  echo "   (ou: cd ../plus-ms-auth && npm run migrate:up)"
+  exit 1
+fi
+
+echo "📝 Inserindo usuário de teste..."
+docker compose exec -T postgres psql -U plus -d plus_auth << 'EOF'
+INSERT INTO users (email, password_hash, role)
+VALUES ('test@example.com', '$2a$10$BAhRUnvGqoTX1i.k9f3LeeOpmWtu71jI3eNF4vtH.Hxb4bnb.yDK2', 'admin')
 ON CONFLICT (email) DO NOTHING;
 
-SELECT COUNT(*) as "Total de Usuários" FROM users;
+SELECT COUNT(*) AS "Total de Usuários" FROM users;
 EOF
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "✅ Database inicializado com sucesso!"
+echo "✅ Seed concluído com sucesso!"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 echo "Credenciais para teste:"
 echo "  Email: test@example.com"
 echo "  Senha: test123"
+echo "  Role:  admin"
 echo ""
 echo "Testar login:"
 echo "  curl -X POST http://localhost:3001/auth/login \\"

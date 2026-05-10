@@ -1,8 +1,9 @@
-.PHONY: help setup up down logs reset tf-init tf-apply init-db status clean
+.PHONY: help setup up down logs reset tf-init tf-apply migrate init-db status clean
 
 COMPOSE       = docker compose
 MINISTACK_URL = http://localhost:4566/_localstack/health
 TF_DIR        = terraform
+MS_AUTH_DIR   = ../plus-ms-auth
 UNAME_S       = $(shell uname -s)
 
 help:
@@ -16,7 +17,8 @@ help:
 	@echo "  make restart            - Reiniciar containers"
 	@echo "  make logs               - Ver logs em tempo real"
 	@echo "  make status             - Ver status dos containers"
-	@echo "  make init-db            - Inicializar banco de dados"
+	@echo "  make migrate            - Rodar migrations do plus-ms-auth"
+	@echo "  make init-db            - Seed do banco (usuário de teste)"
 	@echo "  make reset              - Limpar tudo e reiniciar do zero"
 	@echo "  make clean              - Remover volumes e containers"
 	@echo ""
@@ -50,9 +52,33 @@ tf-apply:
 	TF_VAR_ms_auth_port=$${MS_AUTH_PORT:-3001} \
 	terraform -chdir=$(TF_DIR) apply -auto-approve
 
-# Inicializar o banco de dados
+# Aguarda o Postgres aceitar conexões
+wait-postgres:
+	@echo "[make] Aguardando PostgreSQL ficar pronto..."
+	@for i in $$(seq 1 30); do \
+		if $(COMPOSE) exec -T postgres pg_isready -U plus >/dev/null 2>&1; then \
+			echo "[make] PostgreSQL pronto."; break; \
+		fi; \
+		echo "[make]   ainda não... (tentativa $$i/30)"; \
+		if [ "$$i" = "30" ]; then echo "[make] ERRO: PostgreSQL não ficou pronto a tempo." && exit 1; fi; \
+		sleep 2; \
+	done
+
+# Roda as migrations do plus-ms-auth contra o Postgres local
+migrate: wait-postgres
+	@echo "[make] Rodando migrations do plus-ms-auth..."
+	@if [ ! -d "$(MS_AUTH_DIR)" ]; then \
+		echo "[make] ERRO: $(MS_AUTH_DIR) não encontrado."; exit 1; \
+	fi
+	@if [ ! -d "$(MS_AUTH_DIR)/node_modules" ]; then \
+		echo "[make] Instalando dependências do plus-ms-auth..."; \
+		cd $(MS_AUTH_DIR) && npm install; \
+	fi
+	@cd $(MS_AUTH_DIR) && npm run migrate:up
+
+# Seed do banco (usuário de teste) — exige migrations já rodadas
 init-db:
-	@echo "[make] Inicializando banco de dados..."
+	@echo "[make] Fazendo seed do banco de dados..."
 ifeq ($(UNAME_S),Darwin)
 	@bash scripts/init-db.sh
 else ifeq ($(UNAME_S),Linux)
@@ -71,12 +97,17 @@ status:
 logs:
 	@$(COMPOSE) logs -f
 
-# Setup completo - rodar uma vez no início
-setup: clean up wait-ministack tf-apply init-db
+# Setup da infra - sobe containers e provisiona Terraform
+# (migrations e seed são passos manuais — rode `make migrate` e `make init-db`)
+setup: clean up wait-ministack tf-apply
 	@echo ""
 	@echo "═══════════════════════════════════════════════════════════════════"
-	@echo "  Setup completo!"
+	@echo "  Infra pronta!"
 	@echo "═══════════════════════════════════════════════════════════════════"
+	@echo ""
+	@echo "  Próximos passos (manuais):"
+	@echo "    make migrate     # cria/atualiza schema do banco"
+	@echo "    make init-db     # insere usuário de teste"
 	@echo ""
 	@echo "  Serviços disponíveis em:"
 	@echo "  • Shell App:   http://localhost:3000"
@@ -85,7 +116,7 @@ setup: clean up wait-ministack tf-apply init-db
 	@echo "  • LocalStack:  http://localhost:4566"
 	@echo "  • PostgreSQL:  localhost:5432"
 	@echo ""
-	@echo "  Testar:"
+	@echo "  Após migrate + init-db, testar login:"
 	@echo "  curl -X POST http://localhost:3001/auth/login \\"
 	@echo "    -H 'Content-Type: application/json' \\"
 	@echo "    -d '{\"email\":\"test@example.com\",\"password\":\"test123\"}'"
